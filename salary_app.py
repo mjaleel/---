@@ -155,7 +155,7 @@ def guess_column(keywords, columns):
     return columns[0] if columns else ""
 
 # ====================================================================
-# المعالجة الرئيسية — تُعيد dict من اسم_الملف: bytes
+# المعالجة الرئيسية — تُعيد dict من اسم_الملف: BytesIO
 # ====================================================================
 
 def process_excel_data(uploaded_file, col_name, col_iban, col_salary):
@@ -195,36 +195,29 @@ def process_excel_data(uploaded_file, col_name, col_iban, col_salary):
     date_str = today.strftime('%Y%m%d')
     month_ar = ARABIC_MONTHS.get(today.month, "")
 
-    df['Value Date']             = date_str
-    df['Payer Name']             = PAYER_NAME
-    df['Payer Acount']           = PAYER_ACCOUNT
-    df['Amount']                 = df['الراتب الصافي']
-    df['Currency']               = CURRENCY
-    df['Details of Charges']     = DETAILS_OF_CHARGES
-    df['Beneficiary Name']       = df['الاسم']
-    df['Beneficiary Acount']     = df['Iban']
+    df['Value Date'] = date_str
+    df['Payer Name'] = PAYER_NAME
+    df['Payer Acount'] = PAYER_ACCOUNT
+    df['Amount'] = df['الراتب الصافي']
+    df['Currency'] = CURRENCY
+    df['Details of Charges'] = DETAILS_OF_CHARGES
+    df['Beneficiary Name'] = df['الاسم']
+    df['Beneficiary Acount'] = df['Iban']
     df['Remittance Information'] = REMITTANCE_INFO_TEMPLATE.format(today.year, month_ar)
-    df['Bank Key']               = df['Iban'].str[4:8]
+    df['Bank Key'] = df['Iban'].str[4:8]
 
     df_filtered = df[df['Bank Key'].isin(BANK_KEYS_FOR_FILTERING)].copy()
-
-    # ── حساب Receiver BIC لكل صف (يبقى في البيانات كما هو) ──
     df_filtered['Receiver BIC'] = df_filtered.apply(
         lambda row: get_receiver_bic_dynamic(row, custom_branches), axis=1
     )
     df_filtered['Reference'] = date_str + ' ' + df_filtered['Iban'].astype(str)
 
     output_files = {}
-
-    # ================================================================
-    # التقسيم بحسب المصرف (Bank Key) وليس الفرع (Receiver BIC)
-    # كل مصرف يُجمَع في ملفات بحد أقصى MAX_ROWS_PER_FILE صف أو
-    # MAX_AMOUNT_PER_FILE مبلغاً — بغض النظر عن عدد الفروع.
-    # ================================================================
     grouped = df_filtered.groupby('Bank Key')
     file_count = 0
 
-    for bank_key, bank_df in grouped:
+    for bic, bank_df in grouped:
+        bank_key = bic[:4]
         bank_ar = ARABIC_BANK_NAME_MAP.get(bank_key, 'مصرف')
         num_rows = len(bank_df)
         start_row, file_index = 0, 1
@@ -232,8 +225,6 @@ def process_excel_data(uploaded_file, col_name, col_iban, col_salary):
         while start_row < num_rows:
             end_row = min(start_row + MAX_ROWS_PER_FILE, num_rows)
             current_slice = bank_df.iloc[start_row:end_row]
-
-            # تقليص الشريحة إن تجاوز المبلغ الحد المسموح
             while current_slice['Amount'].sum() > MAX_AMOUNT_PER_FILE and len(current_slice) > 1:
                 end_row -= 1
                 current_slice = bank_df.iloc[start_row:end_row]
@@ -268,6 +259,9 @@ def process_excel_data(uploaded_file, col_name, col_iban, col_salary):
 # ====================================================================
 
 def create_summary_file(excel_files_dict, use_arabic_digits=False):
+    """
+    excel_files_dict: dict of {filename: bytes}
+    """
     rows_data = []
     for filename, content in excel_files_dict.items():
         df = pd.read_excel(io.BytesIO(content))
@@ -449,34 +443,57 @@ def create_summary_file(excel_files_dict, use_arabic_digits=False):
 # ====================================================================
 
 def batch_convert_excel_to_txt(excel_files_dict):
+    """
+    تحويل ملفات Excel إلى CSV بصيغة بنكية صحيحة.
+    الصيغة الناتجة:
+      - السطر الأول: أسماء الأعمدة مفصولة بـ |
+      - باقي الأسطر: القيم مفصولة بـ |
+      - Amount: رقم صحيح نظيف بدون فاصلة وبدون تنصيص
+      - الترميز: UTF-8 بدون BOM
+    """
     result = {}
+
     for filename, content in excel_files_dict.items():
         df = pd.read_excel(io.BytesIO(content), dtype=str)
         base = os.path.splitext(filename)[0]
 
-        if 'Amount' in df.columns:
-            df['Amount'] = (
-                pd.to_numeric(df['Amount'].str.replace(',', ''), errors='coerce')
-                .fillna(0).astype(int).map(lambda x: f'"{x:,}"')
+        # التحقق من وجود الأعمدة المطلوبة
+        missing_cols = [c for c in FINAL_EXCEL_COLS if c not in df.columns]
+        if missing_cols:
+            raise ValueError(
+                f"الأعمدة التالية غير موجودة في {filename}: {', '.join(missing_cols)}"
             )
 
-        cols = [c for c in df.columns if c != 'Reference']
+        # الكتابة سطراً سطراً في الذاكرة
+        lines = []
 
-        tsv_buf = io.StringIO()
-        df[cols].to_csv(tsv_buf, sep='\t', index=False, quoting=csv.QUOTE_NONE, escapechar='\\')
-        tsv_buf.seek(0)
-        lines = tsv_buf.readlines()[1:]
+        # السطر الأول: الـ Headers
+        lines.append('|'.join(FINAL_EXCEL_COLS))
 
-        txt_lines = []
-        for line in lines:
-            txt_lines.append(re.sub(r'[ \t]+', '|', line.strip()) + '\n')
+        # باقي الأسطر: البيانات
+        for _, row in df[FINAL_EXCEL_COLS].iterrows():
+            line_values = []
+            for col in FINAL_EXCEL_COLS:
+                raw_val = str(row[col]).strip()
+                if col == 'Amount':
+                    # إزالة أي فاصلة أو علامات تنصيص وتحويل لرقم صحيح نظيف
+                    clean = raw_val.replace(',', '').replace('"', '')
+                    try:
+                        line_values.append(str(int(float(clean))))
+                    except ValueError:
+                        raise ValueError(
+                            f"قيمة Amount غير صالحة [{raw_val}] في الملف: {filename}"
+                        )
+                else:
+                    line_values.append(raw_val)
+            lines.append('|'.join(line_values))
 
-        txt_content = ''.join(txt_lines).encode('utf-8')
-        result[base + ".txt"] = txt_content
-        result[base + ".csv"] = txt_content
+        # تحويل لـ bytes بترميز UTF-8 بدون BOM
+        csv_content = '\n'.join(lines).encode('utf-8')
+
+        result[base + ".csv"] = csv_content
 
     return result
-
 # ====================================================================
 # تهيئة session_state
 # ====================================================================
@@ -509,6 +526,7 @@ def main():
         initial_sidebar_state="expanded"
     )
 
+    # CSS مخصص RTL
     st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;800&display=swap');
@@ -520,6 +538,7 @@ def main():
         min-height: 100vh;
     }
 
+    /* هيدر رئيسي */
     .main-header {
         background: linear-gradient(135deg, #1a237e 0%, #0d47a1 60%, #1565c0 100%);
         border-radius: 16px;
@@ -542,6 +561,7 @@ def main():
         margin: 0 !important;
     }
 
+    /* بطاقات الأقسام */
     .section-card {
         background: rgba(255,255,255,0.04);
         border: 1px solid rgba(255,255,255,0.1);
@@ -559,6 +579,7 @@ def main():
         border-bottom: 2px solid #1976d2;
     }
 
+    /* بطاقات الإحصاء */
     .stat-grid {
         display: grid;
         grid-template-columns: repeat(3, 1fr);
@@ -583,12 +604,14 @@ def main():
         margin-top: 4px;
     }
 
+    /* شريط الشريط الجانبي */
     [data-testid="stSidebar"] {
         background: linear-gradient(180deg, #0d1b2a 0%, #0a1628 100%) !important;
         border-left: 1px solid rgba(255,255,255,0.08) !important;
     }
     [data-testid="stSidebar"] * { color: #e0e0e0 !important; }
 
+    /* تنسيق الأزرار */
     .stButton > button {
         border-radius: 10px !important;
         font-weight: 700 !important;
@@ -602,15 +625,18 @@ def main():
         box-shadow: 0 6px 20px rgba(0,0,0,0.3) !important;
     }
 
+    /* تنسيق رسائل النجاح والخطأ */
     .stSuccess, .stError, .stWarning, .stInfo {
         border-radius: 10px !important;
     }
 
+    /* تنسيق المدخلات */
     .stSelectbox label, .stFileUploader label, .stRadio label {
         color: #90CAF9 !important;
         font-weight: 600 !important;
     }
 
+    /* عنوان الشريط الجانبي */
     .sidebar-section {
         background: rgba(25,118,210,0.1);
         border: 1px solid rgba(25,118,210,0.2);
@@ -625,6 +651,7 @@ def main():
         margin-bottom: 10px;
     }
 
+    /* بطاقة الملف */
     .file-card {
         background: rgba(46,125,50,0.1);
         border: 1px solid rgba(46,125,50,0.3);
@@ -642,6 +669,7 @@ def main():
         width: 100% !important;
     }
 
+    /* تمييز قسم التحذير */
     .warning-box {
         background: rgba(183,28,28,0.12);
         border: 1px solid rgba(183,28,28,0.35);
@@ -652,6 +680,7 @@ def main():
         line-height: 1.7;
     }
 
+    /* لوج */
     .log-box {
         background: rgba(0,0,0,0.35);
         border: 1px solid rgba(255,255,255,0.08);
@@ -669,6 +698,7 @@ def main():
 
     init_session()
 
+    # ── الهيدر ──────────────────────────────────────────────────────
     st.markdown("""
     <div class="main-header">
         <h1>🏛 نظام معالجة رواتب تربية البصرة</h1>
@@ -677,11 +707,12 @@ def main():
     """, unsafe_allow_html=True)
 
     # ====================================================================
-    # الشريط الجانبي
+    # الشريط الجانبي — الإعدادات
     # ====================================================================
     with st.sidebar:
         st.markdown("### ⚙️ الإعدادات")
 
+        # ── قسم إدارة الفروع ──
         st.markdown('<div class="sidebar-section">', unsafe_allow_html=True)
         st.markdown('<div class="sidebar-section-title">🏦 إدارة فروع المصارف الديناميكية</div>', unsafe_allow_html=True)
 
@@ -744,6 +775,7 @@ def main():
 
         st.divider()
 
+        # ── خيار الأرقام ──
         st.markdown('<div class="sidebar-section">', unsafe_allow_html=True)
         st.markdown('<div class="sidebar-section-title">🔢 نوع الأرقام في الملخص</div>', unsafe_allow_html=True)
         digit_mode = st.radio(
@@ -755,11 +787,13 @@ def main():
         st.markdown('</div>', unsafe_allow_html=True)
 
     # ====================================================================
-    # التابات الرئيسية
+    # المحتوى الرئيسي
     # ====================================================================
     tab1, tab2, tab3 = st.tabs(["① رفع الملف والمعالجة", "② الملخص والتشفير", "③ التنزيل"])
 
-    # ── تاب ١ ──────────────────────────────────────────────────────
+    # ──────────────────────────────────────────────────────────────────
+    # تاب ١ — رفع الملف
+    # ──────────────────────────────────────────────────────────────────
     with tab1:
         st.markdown('<div class="section-card">', unsafe_allow_html=True)
         st.markdown('<div class="section-title">📂 رفع ملف Excel</div>', unsafe_allow_html=True)
@@ -800,6 +834,7 @@ def main():
                         index=columns.index(default_sal) if default_sal in columns else 0,
                         key="col_salary_sel")
 
+                # تحقق من عدم تكرار الأعمدة
                 selected_cols = [col_name, col_iban, col_salary]
                 if len(set(selected_cols)) < 3:
                     st.error("⚠ اخترت نفس العمود لأكثر من حقل! تأكد من اختيار أعمدة مختلفة.")
@@ -810,11 +845,13 @@ def main():
 
                 st.markdown('</div>', unsafe_allow_html=True)
 
+                # معاينة
                 st.markdown('<div class="section-card">', unsafe_allow_html=True)
                 st.markdown('<div class="section-title">👁 معاينة أول 5 صفوف</div>', unsafe_allow_html=True)
                 st.dataframe(df_preview, use_container_width=True)
                 st.markdown('</div>', unsafe_allow_html=True)
 
+                # زر المعالجة
                 if len(set(selected_cols)) == 3:
                     st.markdown('<div class="section-card">', unsafe_allow_html=True)
                     st.markdown('<div class="section-title">🚀 تنفيذ التقسيم والجبر المالي</div>', unsafe_allow_html=True)
@@ -834,9 +871,11 @@ def main():
                                 st.session_state.process_stats   = stats
                                 st.session_state.processing_done = True
 
+                                # عرض اللوج
                                 log_html = "<br>".join(logs)
                                 st.markdown(f'<div class="log-box">{log_html}</div>', unsafe_allow_html=True)
 
+                                # إحصائيات
                                 s = stats
                                 st.markdown(f"""
                                 <div class="stat-grid">
@@ -879,13 +918,16 @@ def main():
         else:
             st.info("⬆ ارفع ملف Excel لبدء العمل")
 
-    # ── تاب ٢ ──────────────────────────────────────────────────────
+    # ──────────────────────────────────────────────────────────────────
+    # تاب ٢ — الملخص والتشفير
+    # ──────────────────────────────────────────────────────────────────
     with tab2:
         if not st.session_state.processing_done or not st.session_state.processed_files:
             st.warning("⚠ يجب إتمام المعالجة في التاب الأول أولاً")
         else:
             files_dict = st.session_state.processed_files
 
+            # ── ملخص الحسابات ──
             st.markdown('<div class="section-card">', unsafe_allow_html=True)
             st.markdown('<div class="section-title">📊 إنشاء ملخص الحسابات المفصّل</div>', unsafe_allow_html=True)
 
@@ -920,6 +962,7 @@ def main():
                         st.error(f"خطأ بالملخص: {e}")
             st.markdown('</div>', unsafe_allow_html=True)
 
+            # ── التشفير ──
             st.markdown('<div class="section-card">', unsafe_allow_html=True)
             st.markdown('<div class="section-title">🔑 تشفير وتحويل الملفات (TXT/CSV)</div>', unsafe_allow_html=True)
 
@@ -934,16 +977,20 @@ def main():
                         st.error(f"خطأ بالتشفير: {e}")
             st.markdown('</div>', unsafe_allow_html=True)
 
-    # ── تاب ٣ ──────────────────────────────────────────────────────
+    # ──────────────────────────────────────────────────────────────────
+    # تاب ٣ — التنزيل
+    # ──────────────────────────────────────────────────────────────────
     with tab3:
         if not st.session_state.processing_done:
             st.warning("⚠ يجب إتمام المعالجة أولاً")
         else:
             files_dict = st.session_state.processed_files
 
+            # ── تنزيل الملفات المقسمة ──
             st.markdown('<div class="section-card">', unsafe_allow_html=True)
             st.markdown('<div class="section-title">📥 تنزيل الملفات المقسمة (Excel)</div>', unsafe_allow_html=True)
 
+            # زر تنزيل ZIP الكلي
             zip_buf = io.BytesIO()
             with zipfile.ZipFile(zip_buf, 'w', zipfile.ZIP_DEFLATED) as zf:
                 for fname, fbytes in files_dict.items():
@@ -974,6 +1021,7 @@ def main():
                     )
             st.markdown('</div>', unsafe_allow_html=True)
 
+            # ── تنزيل الملخص ──
             if "summary_bytes" in st.session_state:
                 st.markdown('<div class="section-card">', unsafe_allow_html=True)
                 st.markdown('<div class="section-title">📊 تنزيل ملخص الحسابات</div>', unsafe_allow_html=True)
@@ -987,6 +1035,7 @@ def main():
                 )
                 st.markdown('</div>', unsafe_allow_html=True)
 
+            # ── تنزيل ملفات التشفير ──
             if "encrypted_files" in st.session_state:
                 st.markdown('<div class="section-card">', unsafe_allow_html=True)
                 st.markdown('<div class="section-title">🔑 تنزيل ملفات التشفير (TXT/CSV)</div>', unsafe_allow_html=True)
@@ -1011,7 +1060,7 @@ def main():
                     with c1:
                         st.markdown(f"🔑 `{fname}`")
                     with c2:
-                        mime = "text/plain" if fname.endswith(".txt") else "text/csv"
+                        mime = "text/csv"
                         st.download_button(
                             "⬇",
                             data=fbytes,
