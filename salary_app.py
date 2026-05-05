@@ -45,8 +45,8 @@ ARABIC_MONTHS = {
 }
 
 FINAL_EXCEL_COLS = [
-    'Reference', 'Value Date', 'Payer Name', 'Payer Acount', 'Amount',
-    'Currency', 'Receiver BIC', 'Beneficiary Name', 'Beneficiary Acount',
+    'Reference', 'Value Date', 'Payer Name', 'Payer Account', 'Amount',
+    'Currency', 'Receiver BIC', 'Beneficiary Name', 'Beneficiary Account',
     'Remittance Information', 'Details of Charges'
 ]
 
@@ -197,12 +197,12 @@ def process_excel_data(uploaded_file, col_name, col_iban, col_salary):
 
     df['Value Date'] = date_str
     df['Payer Name'] = PAYER_NAME
-    df['Payer Acount'] = PAYER_ACCOUNT
+    df['Payer Account'] = PAYER_ACCOUNT
     df['Amount'] = df['الراتب الصافي']
     df['Currency'] = CURRENCY
     df['Details of Charges'] = DETAILS_OF_CHARGES
     df['Beneficiary Name'] = df['الاسم']
-    df['Beneficiary Acount'] = df['Iban']
+    df['Beneficiary Account'] = df['Iban']
     df['Remittance Information'] = REMITTANCE_INFO_TEMPLATE.format(today.year, month_ar)
     df['Bank Key'] = df['Iban'].str[4:8]
 
