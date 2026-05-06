@@ -167,7 +167,13 @@ def process_excel_data(df_input, col_name, col_iban, col_salary, custom_branches
     df['الاسم'] = df['الاسم'].astype(str).str.split().str.join(' ').str[:35]
     today    = datetime.now()
     date_str = st.session_state.get('value_date_override') or today.strftime('%Y%m%d')
-    month_ar = ARABIC_MONTHS.get(today.month, "")
+    try:
+        entered_month = int(date_str[4:6])
+        entered_year  = int(date_str[0:4])
+    except (ValueError, IndexError):
+        entered_month = today.month
+        entered_year  = today.year
+    month_ar = ARABIC_MONTHS.get(entered_month, "")
 
     df['Value Date']             = date_str
     df['Payer Name']             = PAYER_NAME
@@ -177,7 +183,7 @@ def process_excel_data(df_input, col_name, col_iban, col_salary, custom_branches
     df['Details of Charges']     = DETAILS_OF_CHARGES
     df['Beneficiary Name']       = df['الاسم']
     df['Beneficiary Account']    = df['Iban']
-    df['Remittance Information'] = REMITTANCE_INFO_TEMPLATE.format(today.year, month_ar)
+    df['Remittance Information'] = REMITTANCE_INFO_TEMPLATE.format(entered_year, month_ar)
     df['Bank Key']               = df['Iban'].str[4:8]
 
     df_filtered = df[df['Bank Key'].isin(BANK_KEYS_FOR_FILTERING)].copy()
