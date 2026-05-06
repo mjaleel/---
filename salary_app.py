@@ -430,7 +430,7 @@ def convert_excel_to_csv_bytes(file_bytes):
                     val = '0'
             elif col == 'Beneficiary Name':
                 clean_name = ' '.join(raw_val.split())
-                val        = " " + clean_name[:35]
+                val = clean_name[:35]
             else:
                 val = raw_val
             line_values.append(val)
