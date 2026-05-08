@@ -34,7 +34,15 @@ ARABIC_BANK_NAME_MAP = {
     'IDBQ': 'التنمية', 'AINI': 'الطيف', 'NBIQ': 'الأهلي'
 }
 
-BANKS_WITH_DYNAMIC_BRANCHES = ['AINI', 'NBIQ', 'AIBI']
+# نمط BIC لكل مصرف ديناميكي
+BIC_PATTERNS = {
+    'AINI': {'middle': 'IQBA', 'branch_start': 8, 'branch_len': 3},
+    'NBIQ': {'middle': 'IQBA', 'branch_start': 8, 'branch_len': 3},
+    'AIBI': {'middle': 'IQBA', 'branch_start': 8, 'branch_len': 3},
+    'RDBA': {'middle': 'IQB1', 'branch_start': 8, 'branch_len': 3},
+}
+
+BANKS_WITH_DYNAMIC_BRANCHES = ['AINI', 'NBIQ', 'AIBI', 'RDBA']
 BANK_KEYS_FOR_FILTERING = list(BANK_BICS.keys())
 
 ARABIC_MONTHS = {
@@ -52,7 +60,8 @@ ARABIC_DIGITS = str.maketrans('0123456789', '٠١٢٣٤٥٦٧٨٩')
 
 DEFAULT_BRANCHES = {
     "NBIQ": ["NBIQIQBA830", "NBIQIQBA863"],
-    "AIBI": ["AIBIIQBA991", "AIBIIQBA988"]
+    "AIBI": ["AIBIIQBA991", "AIBIIQBA988"],
+    "RDBA": ["RDBAIQB1046", "RDBAIQB1538"],
 }
 
 # ====================================================================
@@ -107,17 +116,20 @@ def apply_financial_rounding(df, column_name):
 
 
 def get_receiver_bic_dynamic(row, custom_branches):
-    key = str(row['Bank Key']).strip().upper()
+    key  = str(row['Bank Key']).strip().upper()
     iban = str(row['Iban']).strip().upper()
-    if key in BANKS_WITH_DYNAMIC_BRANCHES:
+
+    if key in BIC_PATTERNS:
+        pattern = BIC_PATTERNS[key]
         try:
-            if len(iban) >= 11:
-                branch_code = iban[8:11]
-                computed_bic = f"{key}IQBA{branch_code}"
-                return computed_bic
-            return BANK_BICS.get(key, 'UnknownBIC')
+            start        = pattern['branch_start']
+            length       = pattern['branch_len']
+            branch_code  = iban[start: start + length]
+            computed_bic = f"{key}{pattern['middle']}{branch_code}"
+            return computed_bic
         except:
             return BANK_BICS.get(key, 'UnknownBIC')
+
     return BANK_BICS.get(key, 'UnknownBIC')
 
 
@@ -237,10 +249,6 @@ def process_excel_data(df_input, col_name, col_iban, col_salary, custom_branches
 # ====================================================================
 
 def create_summary_file(excel_files_dict, use_arabic_digits=False):
-    """
-    excel_files_dict: dict من اسم الملف → bytes (ملفات xlsx المقسمة)
-    يعيد bytes لملف xlsx الملخص
-    """
     rows_data = []
     for filename, file_bytes in excel_files_dict.items():
         df    = pd.read_excel(io.BytesIO(file_bytes))
@@ -402,7 +410,7 @@ def create_summary_file(excel_files_dict, use_arabic_digits=False):
         wc.alignment = Alignment(horizontal='right', vertical='center')
         wc.border    = medium_border
 
-        ws.freeze_panes         = 'A3'
+        ws.freeze_panes           = 'A3'
         ws.sheet_view.rightToLeft = True
 
     buf.seek(0)
@@ -450,7 +458,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# CSS للدعم الكامل للعربية وRTL
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap');
@@ -460,7 +467,6 @@ st.markdown("""
         direction: rtl;
     }
 
-    /* Header */
     .main-header {
         background: linear-gradient(135deg, #1A237E 0%, #283593 100%);
         padding: 28px 24px;
@@ -481,7 +487,6 @@ st.markdown("""
         margin: 0;
     }
 
-    /* Section headers */
     .section-head {
         background: linear-gradient(90deg, #1F3A5F, #243B55);
         color: #90CAF9;
@@ -493,7 +498,6 @@ st.markdown("""
         border-right: 4px solid #FFD700;
     }
 
-    /* Stats cards */
     .stat-card {
         background: #1E2A3A;
         border: 1px solid #2E4057;
@@ -513,7 +517,6 @@ st.markdown("""
         font-weight: 700;
     }
 
-    /* Success box */
     .success-box {
         background: #1B3A2D;
         border: 1px solid #2ECC71;
@@ -523,7 +526,6 @@ st.markdown("""
         color: #A8EDCA;
     }
 
-    /* Branch tag */
     .branch-tag {
         display: inline-block;
         background: #1F3A5F;
@@ -536,24 +538,21 @@ st.markdown("""
         font-family: monospace;
     }
 
-    /* Sidebar */
     [data-testid="stSidebar"] {
         background: #111827;
         border-left: 1px solid #1F3A5F;
     }
-    [data-testid="stSidebar"] .stMarkdown, 
+    [data-testid="stSidebar"] .stMarkdown,
     [data-testid="stSidebar"] label {
         color: #CBD5E1 !important;
         direction: rtl;
     }
 
-    /* Inputs */
     .stSelectbox label, .stFileUploader label, .stRadio label {
         color: #CBD5E1 !important;
         font-weight: 600;
     }
 
-    /* Buttons */
     .stButton > button {
         background: #0D47A1;
         color: white;
@@ -571,7 +570,6 @@ st.markdown("""
         transform: translateY(-1px);
     }
 
-    /* Download button */
     .stDownloadButton > button {
         background: #1B5E20;
         color: white;
@@ -586,11 +584,8 @@ st.markdown("""
         background: #2E7D32;
     }
 
-    /* Hide Streamlit branding */
     #MainMenu, footer { visibility: hidden; }
     .block-container { padding-top: 1rem; }
-
-    /* Tables */
     .stDataFrame { direction: rtl; }
 
     div[data-testid="stMetricValue"] {
@@ -634,7 +629,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ====================================================================
-# Sidebar — الإعدادات والفروع
+# Sidebar
 # ====================================================================
 
 with st.sidebar:
@@ -642,7 +637,7 @@ with st.sidebar:
     st.markdown("---")
 
     st.markdown("### 🏦 إدارة فروع المصارف")
-    st.caption("(الفروع الديناميكية: AINI, NBIQ, AIBI)")
+    st.caption("(الفروع الديناميكية: AINI, NBIQ, AIBI, RDBA)")
 
     sel_bank = st.selectbox("اختر المصرف", BANKS_WITH_DYNAMIC_BRANCHES, key="sb_bank")
 
@@ -654,7 +649,7 @@ with st.sidebar:
     else:
         st.caption("لا توجد فروع مضافة")
 
-    new_bic = st.text_input("BIC الفرع الجديد", placeholder="مثال: NBIQIQBA863", key="new_bic")
+    new_bic = st.text_input("BIC الفرع الجديد", placeholder="مثال: RDBAIQB1538", key="new_bic")
     if st.button("➕ إضافة فرع"):
         bic_clean = new_bic.strip().upper()
         if len(bic_clean) < 8:
@@ -669,7 +664,7 @@ with st.sidebar:
                 st.success(f"✔ تمت إضافة {bic_clean}")
                 st.rerun()
 
-    del_bic = st.text_input("BIC للحذف", placeholder="مثال: NBIQIQBA830", key="del_bic")
+    del_bic = st.text_input("BIC للحذف", placeholder="مثال: RDBAIQB1046", key="del_bic")
     if st.button("🗑 حذف فرع"):
         bic_del = del_bic.strip().upper()
         if sel_bank in st.session_state.custom_branches and bic_del in st.session_state.custom_branches[sel_bank]:
@@ -700,13 +695,13 @@ with st.sidebar:
     st.caption(f"**الحد الأقصى للملف:** {MAX_ROWS_PER_FILE:,} صف")
 
 # ====================================================================
-# المنطقة الرئيسية — تبويبات
+# التبويبات
 # ====================================================================
 
 tab1, tab2, tab3 = st.tabs(["① رفع الملف والمعالجة", "② الملخص", "③ التشفير CSV"])
 
 # ─────────────────────────────────────────────
-# التبويب الأول: رفع ومعالجة
+# التبويب الأول
 # ─────────────────────────────────────────────
 with tab1:
     st.markdown('<div class="section-head">① رفع ملف Excel</div>', unsafe_allow_html=True)
@@ -780,10 +775,9 @@ with tab1:
         m5.metric("المجموع بعد الجبر",   f"{stats['final_total']:,}")
 
         diff = stats['final_total'] - stats['original_total']
-        rc = "أعشار متبقية"
         st.markdown(f"""
         <div class="success-box">
-        ✔ الجبر المالي ناجح | الفرق: <b>{diff:+.2f}</b> | {rc}: <b>{stats['remaining_dec']}</b>
+        ✔ الجبر المالي ناجح | الفرق: <b>{diff:+.2f}</b> | أعشار متبقية: <b>{stats['remaining_dec']}</b>
         </div>
         """, unsafe_allow_html=True)
 
@@ -816,7 +810,7 @@ with tab1:
                 )
 
 # ─────────────────────────────────────────────
-# التبويب الثاني: الملخص
+# التبويب الثاني
 # ─────────────────────────────────────────────
 with tab2:
     st.markdown('<div class="section-head">إنشاء ملف الملخص المفصّل</div>', unsafe_allow_html=True)
@@ -824,19 +818,17 @@ with tab2:
     if not st.session_state.processed_files:
         st.info("ℹ قم بمعالجة الملف في التبويب الأول أولاً، ثم عد هنا لإنشاء الملخص.")
     else:
-        files_in  = st.session_state.processed_files
-        n_files   = len(files_in)
-        st.write(f"**الملفات المتاحة للتلخيص:** {n_files} ملف")
+        files_in = st.session_state.processed_files
+        st.write(f"**الملفات المتاحة للتلخيص:** {len(files_in)} ملف")
 
-        # جدول معاينة سريعة
         preview_rows = []
         for fname, fbytes in files_in.items():
             df_tmp = pd.read_excel(io.BytesIO(fbytes))
             parts  = fname.split('_')
             preview_rows.append({
-                "المصرف":         parts[0],
-                "اسم الملف":      fname,
-                "عدد الموظفين":   len(df_tmp),
+                "المصرف":          parts[0],
+                "اسم الملف":       fname,
+                "عدد الموظفين":    len(df_tmp),
                 "المبلغ الإجمالي": int(df_tmp['Amount'].sum()) if 'Amount' in df_tmp.columns else 0,
             })
         st.dataframe(pd.DataFrame(preview_rows), use_container_width=True, hide_index=True)
@@ -863,7 +855,7 @@ with tab2:
                     st.error(f"خطأ في إنشاء الملخص: {e}")
 
 # ─────────────────────────────────────────────
-# التبويب الثالث: التشفير CSV
+# التبويب الثالث
 # ─────────────────────────────────────────────
 with tab3:
     st.markdown('<div class="section-head">تشفير وتحويل الملفات إلى CSV البنكي</div>', unsafe_allow_html=True)
