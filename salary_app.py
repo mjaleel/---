@@ -195,7 +195,7 @@ def process_excel_data(df_input, col_name, col_iban, col_salary, custom_branches
     df['Details of Charges']     = DETAILS_OF_CHARGES
     df['Beneficiary Name']       = df['الاسم']
     df['Beneficiary Account']    = df['Iban']
-    df['Remittance Information'] = REMITTANCE_INFO_TEMPLATE.format(entered_year, month_ar)
+    df['Remittance Information'] = REMITTANCE_INFO_TEMPLATE.format(month_ar, entered_year)
     df['Bank Key']               = df['Iban'].str[4:8]
 
     df_filtered = df[df['Bank Key'].isin(BANK_KEYS_FOR_FILTERING)].copy()
